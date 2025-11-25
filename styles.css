@@ -4068,7 +4068,7 @@ body { overflow-x: hidden; }
   top: 18px !important;
   right: 10px !important;
   left: auto !important;
-  z-index: 6 !important; /* above tiles, below header */
+  z-index: 2000 !important; /* ensure above Leaflet layers and within header context */
 }
 @media (max-width: 600px) {
   #mapPreview .map-preview-controls {

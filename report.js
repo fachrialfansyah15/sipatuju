@@ -39,6 +39,22 @@ function showToast(msg, type = 'info') {
   setTimeout(() => { toast.remove(); }, 3000);
 }
 
+// Icon marker lokasi pengguna/terpilih: pin biru (selaras dengan map.html)
+function getUserLocationIcon() {
+  return L.icon({
+    iconUrl:
+      'data:image/svg+xml;utf8,\
+<svg xmlns="http://www.w3.org/2000/svg" width="28" height="42" viewBox="0 0 28 42">\
+  <path d="M14 0C6.82 0 1 5.82 1 13c0 8.35 10.2 19.33 12.4 21.73.56.6 1.64.6 2.2 0C18.8 32.33 29 21.35 29 13 29 5.82 23.18 0 16 0z" fill="%23586EEA" transform="translate(-1)"/>\
+  <circle cx="14" cy="14" r="5" fill="%23ffffff"/>\
+  <circle cx="14" cy="14" r="2.5" fill="%23586EEA"/>\
+</svg>',
+    iconSize: [28, 42],
+    iconAnchor: [14, 42],
+    popupAnchor: [0, -36]
+  });
+}
+
 // ========== Reverse Geocoding Function ==========
 async function reverseGeocode(lat, lng) {
   try {
@@ -97,7 +113,7 @@ map.on("click", async (e) => {
   if (marker) marker.remove();
   
   // Tambahkan marker baru di lokasi yang diklik
-  marker = L.marker([lat, lng]).addTo(map);
+  marker = L.marker([lat, lng], { icon: getUserLocationIcon() }).addTo(map);
   
   // Auto-fill form fields dengan koordinat
   document.getElementById("coordinates").value = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
@@ -135,7 +151,7 @@ async function loadSelectedLocation() {
     
     if (!isNaN(lat) && !isNaN(lng)) {
       if (marker) marker.remove();
-      marker = L.marker([lat, lng]).addTo(map);
+      marker = L.marker([lat, lng], { icon: getUserLocationIcon() }).addTo(map);
       map.setView([lat, lng], 15);
       
       // Auto-fill nama jalan dengan reverse geocoding
@@ -189,7 +205,7 @@ function handleGeolocate() {
 
       // Set marker di lokasi user
       if (marker) marker.remove();
-      marker = L.marker([lat, lng]).addTo(map);
+      marker = L.marker([lat, lng], { icon: getUserLocationIcon() }).addTo(map);
       map.setView([lat, lng], inside ? 16 : 13);
       if (!inside) {
         showToast('Lokasi Anda berada di luar area Palu – peta tetap dipusatkan ke posisi Anda.', 'info');

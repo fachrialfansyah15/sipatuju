@@ -719,46 +719,99 @@ window.SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
     });
   }
 
-  // Auto-locate user position dengan pengecekan bounds
+  // User marker icon (blue pin, like screenshot)
+  function getUserLocationIcon() {
+    return L.icon({
+      iconUrl:
+        'data:image/svg+xml;utf8,\
+<svg xmlns="http://www.w3.org/2000/svg" width="28" height="42" viewBox="0 0 28 42">\
+  <path d="M14 0C6.82 0 1 5.82 1 13c0 8.35 10.2 19.33 12.4 21.73.56.6 1.64.6 2.2 0C18.8 32.33 29 21.35 29 13 29 5.82 23.18 0 16 0z" fill="%23586EEA" transform="translate(-1)"/>\
+  <circle cx="14" cy="14" r="5" fill="%23ffffff"/>\
+  <circle cx="14" cy="14" r="2.5" fill="%23586EEA"/>\
+</svg>',
+      iconSize: [28, 42],
+      iconAnchor: [14, 42],
+      popupAnchor: [0, -36]
+    });
+  }
+
+  // Auto-locate user position dengan pengecekan bounds (watch for better accuracy)
   function autoLocateUserWithBounds(map, bounds) {
     if (navigator.geolocation) {
       console.log('[map.js] Attempting to locate user position...');
       
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const userLat = position.coords.latitude;
-          const userLng = position.coords.longitude;
-          const accuracy = position.coords.accuracy || 0;
-          const userLatLng = L.latLng(userLat, userLng);
-          
-          console.log(`[map.js] User location found: ${userLat}, ${userLng}`);
-          
-          // Jika akurasi terlalu rendah (>150m), gunakan pusat Palu sebagai fallback
-          if (accuracy > 150) {
-            console.warn('[map.js] Low geolocation accuracy:', accuracy, '→ using city center fallback');
-            showToast('Akurasi lokasi rendah. Menampilkan pusat kota Palu.', 'info');
-            map.setView([-0.900, 119.870], 13);
-            return;
-          }
+      // Clear previous watch
+      if (window._geoWatchId) {
+        try { navigator.geolocation.clearWatch(window._geoWatchId); } catch (_) {}
+        window._geoWatchId = null;
+      }
 
-          // Selalu pusatkan ke lokasi user; jika di luar bounds Palu tampilkan informasi
-          const inside = bounds.contains(userLatLng);
-          map.setView([userLat, userLng], inside ? 14 : 13);
-          if (!inside) {
-            showToast('Lokasi Anda berada di luar area Palu – peta tetap dipusatkan ke posisi Anda.', 'info');
-          }
-        },
-        (error) => {
-          console.warn('[map.js] Geolocation failed:', error.message, error);
-          showToast('Tidak bisa mengambil lokasi perangkat. Pastikan izin lokasi diaktifkan.', 'error');
-          // Tetap di view default Palu
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 20000,
-          maximumAge: 0
+      const TARGET_ACCURACY = 50; // meters
+      const WATCH_TIMEOUT_MS = 15000; // stop watch after 15s if not good enough
+      let best = null; // {lat,lng,accuracy}
+
+      function applyPosition(lat, lng, accuracy) {
+        const userLatLng = L.latLng(lat, lng);
+        // Create/update marker
+        if (!window._userMarker) {
+          window._userMarker = L.marker([lat, lng], { icon: getUserLocationIcon() }).addTo(map);
+        } else {
+          window._userMarker.setLatLng([lat, lng]);
         }
-      );
+        // Remove accuracy circle if previously created (user prefers no circle)
+        if (window._userAccuracyCircle) {
+          try { map.removeLayer(window._userAccuracyCircle); } catch(_) {}
+          window._userAccuracyCircle = null;
+        }
+
+        const inside = bounds.contains(userLatLng);
+        map.setView([lat, lng], inside ? 15 : 13);
+        if (!inside) showToast('Lokasi Anda di luar area Palu – peta tetap dipusatkan ke posisi Anda.', 'info');
+      }
+
+      const onSuccess = (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const acc = position.coords.accuracy || 9999;
+        console.log(`[map.js] watchPosition: ${lat}, ${lng} (±${acc}m)`);
+        // Keep best reading
+        if (!best || acc < best.accuracy) best = { lat, lng, accuracy: acc };
+        applyPosition(lat, lng, acc);
+        if (acc <= TARGET_ACCURACY) {
+          // good enough; stop watching
+          if (window._geoWatchId) { navigator.geolocation.clearWatch(window._geoWatchId); window._geoWatchId = null; }
+          showToast('Lokasi akurat ditemukan.', 'success');
+        }
+      };
+
+      const onError = (error) => {
+        console.warn('[map.js] Geolocation failed:', error.message, error);
+        showToast('Tidak bisa mengambil lokasi perangkat. Pastikan izin lokasi diaktifkan.', 'error');
+      };
+
+      // Start watching with high accuracy
+      try {
+        window._geoWatchId = navigator.geolocation.watchPosition(onSuccess, onError, {
+          enableHighAccuracy: true,
+          timeout: WATCH_TIMEOUT_MS,
+          maximumAge: 0
+        });
+      } catch (e) {
+        console.warn('[map.js] watchPosition unsupported, fallback to getCurrentPosition');
+        navigator.geolocation.getCurrentPosition(onSuccess, onError, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+      }
+
+      // Hard stop the watch after timeout to save battery
+      setTimeout(() => {
+        if (window._geoWatchId) { navigator.geolocation.clearWatch(window._geoWatchId); window._geoWatchId = null; }
+        if (best) {
+          if (best.accuracy > TARGET_ACCURACY) showToast('Akurasi lokasi rendah, posisi terbaik ditampilkan.', 'info');
+        }
+      }, WATCH_TIMEOUT_MS + 1000);
+      
+      
+      
+        
     }
   }
 
