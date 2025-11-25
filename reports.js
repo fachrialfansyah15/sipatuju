@@ -174,6 +174,7 @@ class ReportsPage {
                 const { data, error } = await supabase
                     .from('laporan_masuk')
                     .select('*')
+                    .not('status','in','(imported,disetujui,approved)')
                     .order('created_at',{ascending:false});
                 if (error) throw error; rows=data||[];
             } else {
@@ -182,10 +183,15 @@ class ReportsPage {
                     .from('laporan_masuk')
                     .select('*')
                     .eq('user_id',userId)
+                    .not('status','in','(imported,disetujui,approved)')
                     .order('created_at',{ascending:false});
                 if (error) throw error; rows=data||[];
             }
         } catch(e){ box.innerHTML = `<div class="no-reports">${e.message}</div>`; return; }
+        rows = rows.filter(r => {
+            const s = String(r.status||'').toLowerCase();
+            return s !== 'imported' && s !== 'disetujui' && s !== 'approved';
+        });
         // Generate filter opsi jenis kerusakan untuk laporanBaru
         const jenisSet = new Set();
         rows.forEach(r=>{if (r.jenis_kerusakan) jenisSet.add(r.jenis_kerusakan);});
@@ -472,39 +478,110 @@ class ReportsPage {
             this.showMessage('Data tidak ditemukan', 'error');
             return;
         }
+        // Helper: reverse geocode to obtain Palu district
+        const getDistrictCode = async (lat, lng) => {
+            const mapKecToCode = (name) => {
+                const s = String(name || '').toLowerCase();
+                if (s.includes('palu timur')) return 'PT';
+                if (s.includes('palu barat')) return 'PB';
+                if (s.includes('palu selatan')) return 'PS';
+                if (s.includes('palu utara')) return 'PU';
+                if (s.includes('tatanga')) return 'TT';
+                if (s.includes('ulujadi')) return 'UJ';
+                if (s.includes('mantikulore')) return 'MK';
+                if (s.includes('tawaeli')) return 'TW';
+                return null;
+            };
+            try {
+                if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return null;
+                const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=12&addressdetails=1`;
+                const resp = await fetch(url, { headers: { 'User-Agent': 'SIPATUJU Road Monitor App' } });
+                const json = await resp.json().catch(()=>null);
+                const dist = json?.address?.city_district || json?.address?.suburb || json?.address?.county || '';
+                return mapKecToCode(dist);
+            } catch { return null; }
+        };
+        const latNum = typeof src.Latitude === 'number' ? src.Latitude : parseFloat(src.Latitude);
+        const lngNum = typeof src.Longitude === 'number' ? src.Longitude : parseFloat(src.Longitude);
+        let kecCode = await getDistrictCode(latNum, lngNum);
+        if (!kecCode) {
+            // fallback (default Palu Timur) jika gagal deteksi
+            kecCode = 'PT';
+        }
+        // Ambil nomor urut terakhir untuk kecamatan tsb dari jalan_rusak kemudian +1
+        const zeroPad = (n) => String(n).padStart(3, '0');
+        let nextNo = 1;
+        try {
+            const { data: existing, error: qErr } = await supabase
+                .from('jalan_rusak')
+                .select('kode_titik_jalan')
+                .ilike('kode_titik_jalan', `JR-${kecCode}-%`)
+                .limit(1000);
+            if (!qErr && Array.isArray(existing)) {
+                let maxNo = 0;
+                existing.forEach(row => {
+                    const code = String(row.kode_titik_jalan || '');
+                    // format: JR-XX-###
+                    const parts = code.split('-');
+                    const numStr = parts.length >= 3 ? parts[2] : '';
+                    const num = parseInt(numStr, 10);
+                    if (!isNaN(num) && num > maxNo) maxNo = num;
+                });
+                nextNo = maxNo + 1;
+            }
+        } catch {}
+        const kodeTitik = `JR-${kecCode}-${zeroPad(nextNo)}`;
+        // Normalisasi jenis kerusakan ke label yang dipakai di tabel jalan_rusak
+        const normalizeJenis = (val) => {
+            const s = String(val || '').toLowerCase();
+            if (s.includes('minor') || s.includes('ringan')) return 'Rusak Ringan';
+            if (s.includes('medium') || s.includes('sedang')) return 'Rusak Sedang';
+            if (s.includes('severe') || s.includes('berat')) return 'Rusak Berat';
+            return val || 'Rusak Ringan';
+        };
+        const jenisNormalized = normalizeJenis(src.jenis_kerusakan);
         // Insert ke jalan_rusak
         const insertData = {
-            tanggal_survey: src.tanggal_survey,
+            tanggal_survey: src.tanggal_survey || new Date().toLocaleDateString('id-ID'),
             nama_jalan: src.nama_jalan,
-            jenis_kerusakan: src.jenis_kerusakan,
+            jenis_kerusakan: jenisNormalized,
             foto_jalan: src.foto_jalan,
             Latitude: src.Latitude,
             Longitude: src.Longitude,
-            status: 'pending',
-            user_id: src.user_id || null,
-            admin_id: window.auth?.getUserId ? window.auth.getUserId() : null
+            status: 'aktif',
+            kode_titik_jalan: kodeTitik,
+            laporan_id: (typeof src.laporan_id !== 'undefined' && src.laporan_id !== null) ? src.laporan_id : src.id
         };
         const { error: e2 } = await supabase.from('jalan_rusak').insert([insertData]);
         if (e2) {
-            this.showMessage('Gagal approve laporan', 'error');
+            console.error('[approveLaporan] Insert jalan_rusak failed:', e2, { insertData });
+            this.showMessage(`Gagal menyetujui laporan: ${e2.message || 'insert ditolak'}`, 'error');
             return;
         }
-        const { error: e3 } = await supabase.from('laporan_masuk').update({status:'approved'}).eq('id', id);
+        // Tandai laporan_masuk sebagai disetujui agar tidak tampil di box kiri (hindari konflik FK)
+        const { error: e3 } = await supabase
+          .from('laporan_masuk')
+          .update({ status: 'disetujui' })
+          .eq('id', id);
         if (e3) {
-            this.showMessage('Gagal update status laporan', 'error');
+            this.showMessage('Data masuk sudah dipindah, tetapi gagal memperbarui status sumber', 'warning');
         } else {
-            this.showMessage('Laporan disetujui dan dipindahkan.', 'success');
+            this.showMessage('Laporan disetujui dan dipindahkan ke daftar tervalidasi.', 'success');
         }
+        // Refresh kedua daftar
+        await this.renderLists();
     }
     async rejectLaporan(id) {
         const supabase = window.__supabaseClient || (window.__supabaseClient = window.supabase?.createClient(window.SUPABASE_URL, window.SUPABASE_KEY));
         if (!supabase) return;
-        const { error } = await supabase.from('laporan_masuk').update({status:'ditolak'}).eq('id',id);
+        // Hapus langsung dari tabel laporan_masuk saat ditolak
+        const { error } = await supabase.from('laporan_masuk').delete().eq('id',id);
         if (error) {
-            this.showMessage('Gagal menolak laporan','error');
-        } else {
-            this.showMessage('Laporan ditolak','success');
+            this.showMessage('Gagal menolak (hapus) laporan','error');
+            return;
         }
+        this.showMessage('Laporan ditolak dan dihapus dari daftar masuk','success');
+        await this.renderLists();
     }
 
     // Fungsi untuk mengubah status_pengerjaan menjadi "proses"
@@ -623,7 +700,9 @@ class ReportsPage {
             this.showMessage('✅ Laporan berhasil dihapus! Marker akan hilang dari peta.', 'success');
             
             // Reload laporan untuk update UI
-            await this.loadLaporanValid();
+            await this.renderValidList();
+            // Optionally refresh both boxes if needed
+            // await this.renderLists();
             
             // Refresh marker di peta jika fungsi tersedia
             if (window.refreshJalanRusakMarkers) {
@@ -715,326 +794,3 @@ class ReportsPage {
 document.addEventListener('DOMContentLoaded', () => {
     new ReportsPage();
 });
-
-// Add reports page styles
-const reportsStyles = document.createElement('style');
-reportsStyles.textContent = `
-    .reports-container {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
-    }
-
-    .reports-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 30px;
-        padding-bottom: 20px;
-        border-bottom: 2px solid #f0f0f0;
-    }
-
-    .reports-header h2 {
-        color: #333;
-        font-size: 28px;
-        font-weight: 600;
-        margin: 0;
-    }
-
-    .reports-filters {
-        display: flex;
-        gap: 15px;
-    }
-
-    .reports-filters select {
-        padding: 8px 12px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        background: white;
-        font-size: 14px;
-        color: #333;
-        cursor: pointer;
-    }
-
-    .reports-filters select:focus {
-        outline: none;
-        border-color: #667eea;
-        box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
-    }
-
-    .reports-list {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-        gap: 20px;
-    }
-
-    .report-card {
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        overflow: hidden;
-        transition: transform 0.3s ease;
-    }
-
-    .report-card:hover {
-        transform: translateY(-5px);
-    }
-
-    .btn-proses:hover {
-        background: #2563eb !important;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-    }
-
-    .btn-hapus:hover {
-        background: #b91c1c !important;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3);
-    }
-
-    .btn-proses:active, .btn-hapus:active {
-        transform: translateY(0);
-    }
-
-    @media (max-width: 600px) {
-        .btn-proses, .btn-hapus {
-            font-size: 12px !important;
-            padding: 6px 10px !important;
-        }
-        
-        .report-actions > div {
-            flex-direction: column !important;
-        }
-        
-        .btn-proses, .btn-hapus {
-            width: 100% !important;
-        }
-
-        #laporanBaruList .report-content {
-            flex-direction: column;
-        }
-        #laporanBaruList .report-media {
-            width: 100%;
-            height: 180px; /* responsive fixed height on mobile */
-            max-height: 40vh;
-            flex: 0 0 auto;
-        }
-    }
-
-    .report-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 15px 20px;
-        background: #f8f9fa;
-        border-bottom: 1px solid #e0e0e0;
-    }
-
-    .report-id {
-        font-weight: 600;
-        color: #667eea;
-        font-size: 14px;
-    }
-
-    .report-status {
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 500;
-        text-transform: uppercase;
-    }
-
-    .report-status.reported {
-        background: #fff3cd;
-        color: #856404;
-    }
-
-    .report-status.in_progress {
-        background: #d1ecf1;
-        color: #0c5460;
-    }
-
-    .report-status.completed {
-        background: #d4edda;
-        color: #155724;
-    }
-
-    #laporanBaruList .report-content {
-        padding: 20px;
-        display: flex;
-        gap: 16px;
-        align-items: flex-start;
-    }
-
-    #laporanBaruList .report-body {
-        flex: 1 1 auto;
-        min-width: 0;
-    }
-
-    #laporanBaruList .report-media {
-        flex: 0 0 auto;
-        width: 220px;
-        height: 160px; /* fixed box height on desktop */
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        background: #f6f7fb;
-        border-radius: 10px;
-        overflow: hidden;
-    }
-
-    #laporanBaruList .report-media img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-    }
-
-    .report-content h3 {
-        margin: 0 0 10px 0;
-        color: #333;
-        font-size: 18px;
-        font-weight: 600;
-    }
-
-    .report-location {
-        margin: 0 0 10px 0;
-        color: #666;
-        font-size: 14px;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-    }
-
-    .report-location i {
-        color: #667eea;
-    }
-
-    .report-description {
-        margin: 0 0 15px 0;
-        color: #555;
-        line-height: 1.5;
-    }
-
-    .report-meta {
-        display: flex;
-        gap: 15px;
-        margin-bottom: 15px;
-    }
-
-    .report-priority {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        font-size: 12px;
-        font-weight: 500;
-    }
-
-    .report-priority.high {
-        color: #dc3545;
-    }
-
-    .report-priority.medium {
-        color: #ffc107;
-    }
-
-    .report-priority.low {
-        color: #28a745;
-    }
-
-    .report-date {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        font-size: 12px;
-        color: #666;
-    }
-
-    .report-actions {
-        padding: 15px 20px;
-        background: #f8f9fa;
-        border-top: 1px solid #e0e0e0;
-        display: flex;
-        gap: 10px;
-    }
-
-    .report-actions button {
-        padding: 8px 16px;
-        border: none;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-    }
-
-    .report-actions .btn-primary {
-        background: #667eea;
-        color: white;
-    }
-
-    .report-actions .btn-primary:hover {
-        background: #5a6fd8;
-    }
-
-    .report-actions .btn-secondary {
-        background: #f8f9fa;
-        color: #666;
-        border: 1px solid #ddd;
-    }
-
-    .report-actions .btn-secondary:hover {
-        background: #e9ecef;
-    }
-
-    .no-reports {
-        text-align: center;
-        padding: 60px 20px;
-        color: #666;
-    }
-
-    .no-reports i {
-        font-size: 64px;
-        color: #ddd;
-        margin-bottom: 20px;
-    }
-
-    .no-reports h3 {
-        margin: 0 0 10px 0;
-        color: #333;
-        font-size: 24px;
-    }
-
-    .no-reports p {
-        margin: 0 0 15px 0;
-        font-size: 16px;
-    }
-
-    @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-
-    @keyframes slideOut {
-        from {
-            transform: translateX(0);
-            opacity: 1;
-        }
-        to {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-    }
-`;
-document.head.appendChild(reportsStyles);
-
-

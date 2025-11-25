@@ -4107,6 +4107,44 @@ body { overflow-x: hidden; }
   transform: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
+/* Reports: ensure images in Laporan Masuk cards fit the fixed media box */
+#laporanBaruList .report-content {
+  padding: 20px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+#laporanBaruList .report-body { flex: 1 1 auto; min-width: 0; }
+
+#laporanBaruList .report-media {
+  flex: 0 0 auto;
+  width: 220px;
+  height: 160px; /* fixed box height on desktop */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #f6f7fb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+#laporanBaruList .report-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+@media (max-width: 600px) {
+  #laporanBaruList .report-content { flex-direction: column; }
+  #laporanBaruList .report-media {
+    width: 100%;
+    height: 180px; /* responsive fixed height on mobile */
+    max-height: 40vh;
+    flex: 0 0 auto;
+  }
+}
 /* Old filterBox rules removed - now using consolidated rules at line 10-39 */
 #legendBox {
   position: absolute;
