@@ -555,7 +555,7 @@ class ReportsPage {
         const { error: e2 } = await supabase.from('jalan_rusak').insert([insertData]);
         if (e2) {
             console.error('[approveLaporan] Insert jalan_rusak failed:', e2, { insertData });
-            this.showMessage(`Gagal menyetujui laporan: ${e2.message || 'insert ditolak'}`, 'error');
+            this.showMessage(`Gagal menyetujui laporann: ${e2.message || 'insert ditolak'}`, 'error');
             return;
         }
         // Tandai laporan_masuk sebagai disetujui agar tidak tampil di box kiri (hindari konflik FK)
