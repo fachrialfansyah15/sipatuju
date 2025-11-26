@@ -263,7 +263,8 @@ class ReportsPage {
                   <div class="report-body">
                     <h3>${jenisDisplay}</h3>
                     <p class="report-location"><i class="fas fa-map-marker-alt"></i>${r.nama_jalan||''}</p>
-                    <div class="report-meta"><span class="report-date"><i class="fas fa-clock"></i>${r.created_at?new Date(r.created_at).toLocaleString():''}</span></div>
+                    <div class="report-meta"><span class="report-date"><i class="fas fa-clock"></i>${r.tanggal_survey ? new Date(r.tanggal_survey).toLocaleDateString('id-ID') : ''}
+</span></div>
                     <div class="report-description">${r.description||''}</div>
                   </div>
                   ${fotoEl}
@@ -391,7 +392,8 @@ class ReportsPage {
                 <div class="report-content">
                 <h3>${jenisDisplay}</h3>
                 <p class="report-location"><i class="fas fa-map-marker-alt"></i>${r.nama_jalan||''}</p>
-                <div class="report-meta"><span class="report-date"><i class="fas fa-clock"></i>${r.tanggal_survey?new Date(r.tanggal_survey).toLocaleString():''}</span></div>
+                <div class="report-meta"><span class="report-date"><i class="fas fa-clock"></i>${r.tanggal_survey ? new Date(r.tanggal_survey).toLocaleDateString('id-ID') : ''}
+</span></div>
                 <div class="report-description">${r.description||''}</div>
                 ${actionButtons}
                 </div>
